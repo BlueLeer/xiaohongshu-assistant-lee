@@ -84,6 +84,7 @@ XHS_CLI_COMMAND=/path/to/xhs XHS_COOKIE_SOURCE=none npm run launch:fixed
 - `docs/DESIGN.md`：视觉系统、布局规则和资产风格。
 - `docs/VERIFICATION.md`：构建、截图和交互验证清单。
 - `docs/QA_LOG.md`：最近视觉 QA 记录和当前状态。
+- 未完成
 
 ## 当前项目状态
 
