@@ -4,6 +4,7 @@ const ALLOWED_HOST_SUFFIXES = [".xhscdn.com", ".xiaohongshu.com"];
 const IMAGE_ROUTE = "/api/xhs/image";
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"]);
 
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -36,16 +37,26 @@ async function fetchImage(targetUrl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(targetUrl, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": BROWSER_UA,
-        Referer: "https://www.xiaohongshu.com/",
-        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-      },
-    });
-    return response;
+    let currentUrl = new URL(targetUrl);
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+      if (!isAllowedHost(currentUrl.hostname)) {
+        throw new CodexApiError("XHS_IMAGE_HOST_DENIED", "图片重定向到了不受支持的来源。", 403);
+      }
+      const response = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Referer: "https://www.xiaohongshu.com/",
+          Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      const location = response.headers.get("location");
+      if (!location) return response;
+      currentUrl = new URL(location, currentUrl);
+    }
+    throw new CodexApiError("XHS_IMAGE_REDIRECT_LIMIT", "图片重定向次数过多。", 502);
   } finally {
     clearTimeout(timer);
   }
@@ -96,6 +107,15 @@ export async function serveXhsImage(requestUrl, res, next) {
 
     const contentType = response.headers.get("content-type") || "image/jpeg";
     const contentLength = response.headers.get("content-length");
+    const mimeType = contentType.split(";", 1)[0].toLowerCase();
+    if (!ALLOWED_IMAGE_TYPES.has(mimeType)) {
+      sendText(res, 415, "Unsupported image content type.");
+      return true;
+    }
+    if (contentLength && Number(contentLength) > MAX_IMAGE_BYTES) {
+      sendText(res, 413, "Image is too large.");
+      return true;
+    }
 
     res.statusCode = 200;
     res.setHeader("Content-Type", contentType);
@@ -120,6 +140,7 @@ export async function serveXhsImage(requestUrl, res, next) {
         received += value.byteLength;
         if (received > MAX_IMAGE_BYTES) {
           reader.cancel().catch(() => {});
+          res.destroy();
           return true;
         }
         res.write(Buffer.from(value));

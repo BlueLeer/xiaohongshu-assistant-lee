@@ -10,6 +10,7 @@ import {
   requestXhsNote,
   requestXhsSearch,
 } from "./codexClient.js";
+import { readWorkspaceDraft, useModelConfig, useWorkspaceDraft, useWorkspaceHistory } from "./hooks/useLocalWorkspace.js";
 
 const STORAGE_PREFIX = "mint-atelier-v2";
 
@@ -92,13 +93,6 @@ const decisionLabels = {
   draft: "文案",
   coverPrompt: "封面 Prompt",
 };
-
-const sidebarProjects = [
-  { title: "夏日通勤穿搭", meta: "新版流程草稿", active: true },
-  { title: "治愈系家居好物", meta: "待补参考" },
-  { title: "露营装备红榜", meta: "选题阶段" },
-  { title: "轻便出行搭配", meta: "封面待生成" },
-];
 
 const errorMessages = {
   search: "搜索失败：请确认关键词不为空，并检查 xhs CLI 登录状态或网络状态后重试。",
@@ -367,13 +361,14 @@ export function App() {
   const personaRef = useRef(null);
   const keywordRef = useRef(null);
   const writingBriefRef = useRef(null);
+  const coverUploadRef = useRef(null);
   const topMenuRef = useRef(null);
   const topMenuTriggerRef = useRef(null);
   const hoverCloseTimer = useRef(null);
   const [persona, setPersona] = useStoredState("persona", defaultPersona);
   const [keyword, setKeyword] = useStoredState("keyword", defaultKeyword);
   const [writingBrief, setWritingBrief] = useStoredState("writingBrief", defaultBrief);
-  const [modelConfig, setModelConfig] = useStoredState("modelConfig", defaultModelConfig);
+  const [modelConfig, setModelConfig] = useModelConfig(defaultModelConfig);
   const [localClis, setLocalClis] = useState(defaultLocalClis);
   const [cliDetectionState, setCliDetectionState] = useState("idle");
   const [activeStep, setActiveStep] = useState("research");
@@ -381,17 +376,17 @@ export function App() {
   const [popupPosition, setPopupPosition] = useState(null);
   const [automationEnabled, setAutomationEnabled] = useStoredState("automationEnabled", true);
   const [autoSaveEnabled, setAutoSaveEnabled] = useStoredState("autoSaveEnabled", true);
-  const [searchResults, setSearchResults] = useState([]);
-  const [selectedSearchIds, setSelectedSearchIds] = useState([]);
-  const [ragItems, setRagItems] = useState([]);
-  const [topics, setTopics] = useState([]);
-  const [selectedTopicId, setSelectedTopicId] = useState(null);
-  const [drafts, setDrafts] = useState([]);
-  const [selectedDraftId, setSelectedDraftId] = useState(null);
-  const [prompts, setPrompts] = useState([]);
-  const [selectedPromptId, setSelectedPromptId] = useState(null);
-  const [coverImage, setCoverImage] = useState(null);
-  const [lastSavedAt, setLastSavedAt] = useState("");
+  const [searchResults, setSearchResults] = useState(() => readWorkspaceDraft().searchResults || []);
+  const [selectedSearchIds, setSelectedSearchIds] = useState(() => readWorkspaceDraft().selectedSearchIds || []);
+  const [ragItems, setRagItems] = useState(() => readWorkspaceDraft().ragItems || []);
+  const [topics, setTopics] = useState(() => readWorkspaceDraft().topics || []);
+  const [selectedTopicId, setSelectedTopicId] = useState(() => readWorkspaceDraft().selectedTopicId || null);
+  const [drafts, setDrafts] = useState(() => readWorkspaceDraft().drafts || []);
+  const [selectedDraftId, setSelectedDraftId] = useState(() => readWorkspaceDraft().selectedDraftId || null);
+  const [prompts, setPrompts] = useState(() => readWorkspaceDraft().prompts || []);
+  const [selectedPromptId, setSelectedPromptId] = useState(() => readWorkspaceDraft().selectedPromptId || null);
+  const [coverImage, setCoverImage] = useState(() => readWorkspaceDraft().coverImage || null);
+  const [lastSavedAt, setLastSavedAt] = useState(() => readWorkspaceDraft().savedAt ? nowText() : "");
   const [noteDetail, setNoteDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -409,6 +404,7 @@ export function App() {
     code: "",
   });
   const [logs, setLogs] = useState([]);
+  const { history, saveSnapshot, removeSnapshot } = useWorkspaceHistory();
   const logSeqRef = useRef(0);
   const lastLoggedStatusRef = useRef(null);
 
@@ -899,6 +895,22 @@ export function App() {
     setCoverImage(null);
   };
 
+  const clearDownstreamFromRag = () => {
+    setTopics([]);
+    setSelectedTopicId(null);
+    setDrafts([]);
+    setSelectedDraftId(null);
+    setPrompts([]);
+    setSelectedPromptId(null);
+    setCoverImage(null);
+  };
+
+  const removeRagItem = (id) => {
+    setRagItems((current) => current.filter((item) => item.id !== id));
+    clearDownstreamFromRag();
+    pushLog("info", "RAG 已更新", "参考内容已移除，后续选题与文案已清空，避免继续使用过期上下文。");
+  };
+
   const openNoteDetail = async (result) => {
     if (!result?.noteId) {
       setDetailError("该结果缺少笔记 ID，无法加载详情。");
@@ -932,6 +944,53 @@ export function App() {
     setDetailLoading(false);
   };
 
+  const importCoverImage = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setCustomError("请选择 PNG、JPG、WebP 等图片文件。");
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setCustomError("导入图片请控制在 3MB 以内，以便安全保存到本地草稿。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCoverImage({
+        promptId: "imported-cover",
+        src: String(reader.result),
+        alt: `导入封面：${file.name}`,
+        title: file.name,
+        createdAt: nowText(),
+        generatedAt: new Date().toISOString(),
+        source: "imported",
+      });
+      setActiveStep("cover");
+      pushLog("success", "已导入封面", `已将「${file.name}」设为当前封面。`);
+    };
+    reader.onerror = () => setCustomError("图片读取失败，请换一张图片重试。");
+    reader.readAsDataURL(file);
+  };
+
+  const openPostPreview = () => {
+    setDetailError("");
+    setDetailLoading(false);
+    setCarouselIndex(0);
+    setNoteDetail({
+      mode: "preview",
+      title: selectedDraft?.title || "小红书草稿预览",
+      desc: selectedDraft?.body || "选择一篇文案后，这里将展示完整的小红书发布预览。",
+      author: "薄荷小丸子",
+      type: "image",
+      coverUrl: coverImage?.src || "/assets/spring-outfit.png",
+      images: [],
+      tags: [keyword || "小红书创作"],
+      metrics: { liked: "1289", collected: "965", comments: "213", shares: "—" },
+    });
+  };
+
   const toggleSearchResult = (id) => {
     setSelectedSearchIds((current) =>
       current.includes(id) ? current.filter((itemId) => itemId !== id) : [...current, id],
@@ -949,6 +1008,7 @@ export function App() {
       const existingIds = new Set(current.map((item) => item.id));
       return [...current, ...selectedItems.filter((item) => !existingIds.has(item.id))];
     });
+    clearDownstreamFromRag();
     setActiveStep("rag");
     pushLog("success", "RAG 入库", `已加入 ${selectedItems.length} 条参考内容到本地 RAG。`);
   };
@@ -1273,6 +1333,31 @@ export function App() {
         generatedAt: coverResult.generatedAt,
         code: "",
       });
+      saveSnapshot({
+        persona: context.persona,
+        keyword: context.keyword,
+        writingBrief: context.writingBrief,
+        searchResults: nextSearchResults,
+        selectedSearchIds: nextSelectedSearchIds,
+        ragItems: nextRagItems,
+        topics: nextTopics,
+        selectedTopicId: nextSelectedTopic.id,
+        selectedTopic: nextSelectedTopic,
+        drafts: nextDrafts,
+        selectedDraftId: nextSelectedDraft.id,
+        selectedDraft: nextSelectedDraft,
+        prompts: nextPrompts,
+        selectedPromptId: nextSelectedPrompt.id,
+        selectedPrompt: nextSelectedPrompt,
+        coverImage: {
+          promptId: nextSelectedPrompt.id,
+          src: coverResult.image.src,
+          alt: coverResult.image.alt,
+          title: coverResult.image.title,
+          createdAt: nowText(),
+          generatedAt: coverResult.generatedAt,
+        },
+      }, "自动化完成");
       pushLog("success", "自动化完成", "热门参考、RAG、选题、文案、封面 Prompt 与封面图均已生成。");
     } catch (error) {
       const message = error?.message || "自动化生成失败。";
@@ -1299,9 +1384,36 @@ export function App() {
     return savedAt;
   };
 
+  const currentWorkspace = () => ({
+    persona, keyword, writingBrief, searchResults, selectedSearchIds, ragItems,
+    topics, selectedTopicId, selectedTopic, drafts, selectedDraftId, selectedDraft,
+    prompts, selectedPromptId, selectedPrompt, coverImage,
+  });
+
+  const loadHistory = (snapshot) => {
+    const draft = snapshot.workspace;
+    setPersona(draft.persona || "");
+    setKeyword(draft.keyword || "");
+    setWritingBrief(draft.writingBrief || "");
+    setSearchResults(draft.searchResults || []);
+    setSelectedSearchIds(draft.selectedSearchIds || []);
+    setRagItems(draft.ragItems || []);
+    setTopics(draft.topics || []);
+    setSelectedTopicId(draft.selectedTopicId || null);
+    setDrafts(draft.drafts || []);
+    setSelectedDraftId(draft.selectedDraftId || null);
+    setPrompts(draft.prompts || []);
+    setSelectedPromptId(draft.selectedPromptId || null);
+    setCoverImage(draft.coverImage || null);
+    setActiveStep(draft.coverImage ? "cover" : draft.drafts?.length ? "drafts" : draft.topics?.length ? "topics" : "research");
+    setLastSavedAt(nowText());
+    pushLog("success", "已载入历史草稿", `已恢复「${snapshot.title}」的创作内容。`);
+  };
+
   const saveDraft = () => {
     const savedAt = stampSaved();
-    pushLog("success", "保存草稿", `已手动保存到本地状态（${savedAt}）。`);
+    const snapshot = saveSnapshot(currentWorkspace());
+    pushLog("success", "保存草稿", `已保存「${snapshot.title}」到历史草稿库（${savedAt}）。`);
   };
 
   // 自动保存：开启后，核心字段变更后静默保存（不弹成功提示）
@@ -1323,6 +1435,24 @@ export function App() {
       code: cliStatus.code,
     });
   }, [cliStatus]);
+
+  const workspaceSavedAt = useWorkspaceDraft({
+    persona,
+    keyword,
+    writingBrief,
+    searchResults,
+    selectedSearchIds,
+    ragItems,
+    topics,
+    selectedTopicId,
+    drafts,
+    selectedDraftId,
+    prompts,
+    selectedPromptId,
+    // Generated files live in a temporary server directory. Keep their metadata,
+    // but allow the UI to fall back gracefully if a previous server has stopped.
+    coverImage,
+  });
 
   return (
     <div className="app-root" aria-label="薄荷工坊新版小红书 AI 助理">
@@ -1478,16 +1608,20 @@ export function App() {
 
         <section className="project-list">
           <header>
-            <h3>草稿项目</h3>
+            <h3>历史草稿</h3>
+            <span>{history.length}/20</span>
           </header>
-          {sidebarProjects.map((project) => (
-            <button key={project.title} className={project.active ? "project active" : "project"} type="button">
-              <SoftIcon tone={project.active ? "mint" : "muted"}>稿</SoftIcon>
-              <span>
-                <strong>{project.title}</strong>
-                <small>{project.meta}</small>
-              </span>
-            </button>
+          {history.length === 0 ? <p className="history-empty">手动保存后，可在这里回看完整创作内容。</p> : history.map((project) => (
+            <div key={project.id} className="history-item">
+              <button className="project" type="button" onClick={() => loadHistory(project)}>
+                <SoftIcon tone="mint">稿</SoftIcon>
+                <span>
+                  <strong>{project.title}</strong>
+                  <small>{project.meta} · {new Date(project.savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small>
+                </span>
+              </button>
+              <button className="history-remove" type="button" aria-label={`删除历史草稿 ${project.title}`} onClick={() => removeSnapshot(project.id)}>×</button>
+            </div>
           ))}
         </section>
 
@@ -1500,7 +1634,18 @@ export function App() {
       <main className="app-main" data-scroll-region="primary">
         <section className="hero-status">
           <div className="hero-progress">
-            <h1>创作流程 {progress}%</h1>
+            <div className="hero-title-row">
+              <div>
+                <span className="eyebrow">创作工作区</span>
+                <h1>创作流程 {progress}%</h1>
+              </div>
+              <div className="workspace-actions">
+                <span className="save-hint">{lastSavedAt ? `已保存 ${lastSavedAt}` : workspaceSavedAt ? "已恢复本地草稿" : "本地草稿会自动保存"}</span>
+                <button className="ghost-button small" type="button" onClick={resetGeneratedState} disabled={isBusy}>
+                  清空生成结果
+                </button>
+              </div>
+            </div>
             <div className="progress-bar">
               <i style={{ "--progress": `${progress}%` }} />
             </div>
@@ -1639,9 +1784,14 @@ export function App() {
               ) : (
                 ragItems.map((item) => (
                   <article key={item.id} className="rag-item">
-                    <strong>{item.title}</strong>
-                    <p>{item.excerpt}</p>
-                    <small>{item.tags.join(" / ")}</small>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.excerpt}</p>
+                      <small>{item.tags.join(" / ")}</small>
+                    </div>
+                    <button type="button" onClick={() => removeRagItem(item.id)} aria-label={`移除 ${item.title}`}>
+                      移除
+                    </button>
                   </article>
                 ))
               )}
@@ -1677,7 +1827,15 @@ export function App() {
                   <button
                     key={topic.id}
                     className={selectedTopicId === topic.id ? "topic-card selected" : "topic-card"}
-                    onClick={() => setSelectedTopicId(topic.id)}
+                    onClick={() => {
+                      if (topic.id === selectedTopicId) return;
+                      setSelectedTopicId(topic.id);
+                      setDrafts([]);
+                      setSelectedDraftId(null);
+                      setPrompts([]);
+                      setSelectedPromptId(null);
+                      setCoverImage(null);
+                    }}
                     type="button"
                   >
                     <span>{String(index + 1).padStart(2, "0")}</span>
@@ -1728,7 +1886,13 @@ export function App() {
                   <button
                     key={draft.id}
                     className={selectedDraftId === draft.id ? "draft-card selected" : "draft-card"}
-                    onClick={() => setSelectedDraftId(draft.id)}
+                    onClick={() => {
+                      if (draft.id === selectedDraftId) return;
+                      setSelectedDraftId(draft.id);
+                      setPrompts([]);
+                      setSelectedPromptId(null);
+                      setCoverImage(null);
+                    }}
                     type="button"
                   >
                     <span>文案 {index + 1}</span>
@@ -1794,7 +1958,11 @@ export function App() {
                       <p>正在生成封面图...</p>
                     </div>
                   ) : coverImage ? (
-                    <img src={coverImage.src} alt={coverImage.alt} />
+                    <img
+                      src={coverImage.src}
+                      alt={coverImage.alt}
+                      onError={() => setCoverImage(null)}
+                    />
                   ) : (
                     <div className="cover-placeholder">
                       <SoftIcon tone="mint">图</SoftIcon>
@@ -1813,6 +1981,10 @@ export function App() {
                   >
                     {generatingKind === "coverImage" ? "生成中..." : "重新生成"}
                   </button>
+                  <button className="ghost-button" disabled={isBusy} type="button" onClick={() => coverUploadRef.current?.click()}>
+                    导入本地图片
+                  </button>
+                  <input ref={coverUploadRef} className="cover-upload-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={importCoverImage} />
                 </div>
               </div>
             </div>
@@ -1821,7 +1993,7 @@ export function App() {
 
         <section className="bottom-grid">
           <article className="card preview-card">
-            <SectionHeader icon="预" tone="mint" title="小红书预览" meta="选择文案后实时查看草稿" />
+            <SectionHeader icon="预" tone="mint" title="小红书预览" meta="选择文案后实时查看草稿" action={<button className="ghost-button small" type="button" onClick={openPostPreview}>预览</button>} />
             <div className="post-card">
               <div className="post-author">
                 <img src="/assets/avatar-creator.png" alt="" />
@@ -1834,7 +2006,7 @@ export function App() {
                   src={coverImage?.src ?? "/assets/spring-outfit.png"}
                   alt={coverImage?.alt ?? "夏日穿搭系列封面预览"}
                 />
-                <span className="cover-count">{coverImage ? "已生成" : "预览"}</span>
+                  <span className="cover-count">{coverImage?.source === "imported" ? "已导入" : coverImage ? "已生成" : "预览"}</span>
               </div>
               <h3>{selectedDraft?.title ?? "选择一篇文案后，这里显示小红书标题"}</h3>
               <p>{selectedDraft?.body ?? "正文预览会保留话题标签格式，例如 #夏日通勤[话题]#。"}</p>
@@ -1949,7 +2121,11 @@ export function App() {
             if (event.target === event.currentTarget) closeNoteDetail();
           }}
         >
-          <div className="note-modal">
+          <div className="note-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="phone-speaker" aria-hidden="true" />
+            <div className="phone-statusbar" aria-hidden="true">
+              <span>9:41</span><span>▮▮▮ ᴡɪꜰɪ ▰</span>
+            </div>
             <button
               className="note-modal-close"
               type="button"
@@ -1965,7 +2141,7 @@ export function App() {
                 <p>正在加载笔记详情…</p>
               </div>
             ) : (
-              <>
+              <div className="note-modal-scroll">
                 {(() => {
                   const merged = [];
                   const seen = new Set();
@@ -1980,7 +2156,7 @@ export function App() {
                   const current = Math.min(carouselIndex, total - 1);
                   const go = (next) => setCarouselIndex((next + total) % total);
                   return (
-                    <div className="note-carousel">
+                    <div className="note-carousel" aria-label="笔记媒体预览">
                       <div className="note-carousel-track">
                         {merged.map((url, index) => (
                           <figure
@@ -1988,7 +2164,10 @@ export function App() {
                             className={index === current ? "note-carousel-slide is-active" : "note-carousel-slide"}
                             aria-hidden={index !== current}
                           >
-                            <img src={url} alt={`${noteDetail.title || "笔记"} 图 ${index + 1}`} />
+                            <img
+                              src={url}
+                              alt={`${noteDetail.title || "笔记"} 图 ${index + 1}`}
+                            />
                             {noteDetail.type === "video" && index === 0 ? (
                               <span className="note-type-badge">视频</span>
                             ) : null}
@@ -2032,6 +2211,7 @@ export function App() {
                 })()}
 
                 <div className="note-modal-body">
+                  <p className="note-reading-label">{noteDetail.mode === "preview" ? "小红书发布预览" : "热门笔记详情"}</p>
                   <h2>{noteDetail.title || noteDetail.fallback?.title || "笔记详情"}</h2>
 
                   <div className="note-author-row">
@@ -2084,8 +2264,9 @@ export function App() {
                     <p className="note-modal-id">笔记 ID：{noteDetail.noteId}</p>
                   ) : null}
                 </div>
-              </>
+              </div>
             )}
+            <div className="phone-home-indicator" aria-hidden="true" />
           </div>
         </div>
       ) : null}
