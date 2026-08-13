@@ -7,6 +7,7 @@ import {
   requestLocalCliDecision,
   requestLocalCliDetection,
   requestLocalCliGeneration,
+  requestXhsNote,
   requestXhsSearch,
 } from "./codexClient.js";
 
@@ -149,10 +150,6 @@ function isCloudPlaceholderModel(value) {
 
 function SoftIcon({ children, tone = "mint" }) {
   return <span className={`soft-icon ${tone}`}>{children}</span>;
-}
-
-function StageBadge({ children, tone = "mint" }) {
-  return <span className={`stage-badge ${tone}`}>{children}</span>;
 }
 
 function SectionHeader({ icon, tone = "mint", title, meta, action }) {
@@ -370,6 +367,9 @@ export function App() {
   const personaRef = useRef(null);
   const keywordRef = useRef(null);
   const writingBriefRef = useRef(null);
+  const topMenuRef = useRef(null);
+  const topMenuTriggerRef = useRef(null);
+  const hoverCloseTimer = useRef(null);
   const [persona, setPersona] = useStoredState("persona", defaultPersona);
   const [keyword, setKeyword] = useStoredState("keyword", defaultKeyword);
   const [writingBrief, setWritingBrief] = useStoredState("writingBrief", defaultBrief);
@@ -377,7 +377,10 @@ export function App() {
   const [localClis, setLocalClis] = useState(defaultLocalClis);
   const [cliDetectionState, setCliDetectionState] = useState("idle");
   const [activeStep, setActiveStep] = useState("research");
-  const [showTopActions, setShowTopActions] = useState(false);
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
+  const [popupPosition, setPopupPosition] = useState(null);
+  const [automationEnabled, setAutomationEnabled] = useStoredState("automationEnabled", true);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useStoredState("autoSaveEnabled", true);
   const [searchResults, setSearchResults] = useState([]);
   const [selectedSearchIds, setSelectedSearchIds] = useState([]);
   const [ragItems, setRagItems] = useState([]);
@@ -389,6 +392,10 @@ export function App() {
   const [selectedPromptId, setSelectedPromptId] = useState(null);
   const [coverImage, setCoverImage] = useState(null);
   const [lastSavedAt, setLastSavedAt] = useState("");
+  const [noteDetail, setNoteDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [carouselIndex, setCarouselIndex] = useState(0);
   const [generatingKind, setGeneratingKind] = useState("");
   const [automationRunning, setAutomationRunning] = useState(false);
   const [automationStage, setAutomationStage] = useState("");
@@ -401,10 +408,21 @@ export function App() {
     generatedAt: "",
     code: "",
   });
-  const [notice, setNotice] = useState({
-    type: "ready",
-    text: "已加载新版阶段式工作台，支持手动逐步确认或一次点击自动化生成。",
-  });
+  const [logs, setLogs] = useState([]);
+  const logSeqRef = useRef(0);
+  const lastLoggedStatusRef = useRef(null);
+
+  const pushLog = (type, label, text, extra = {}) => {
+    const time = new Date().toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    setLogs((current) => [
+      { id: `log-${logSeqRef.current++}`, type, label, text, time, ...extra },
+      ...current,
+    ].slice(0, 50));
+  };
 
   const selectedTopic = useMemo(
     () => topics.find((topic) => topic.id === selectedTopicId),
@@ -447,18 +465,83 @@ export function App() {
   ]);
 
   const setError = (key) => {
-    setNotice({ type: "error", text: errorMessages[key] });
-  };
-
-  const setSuccess = (text) => {
-    setNotice({ type: "success", text });
+    pushLog("error", "校验失败", errorMessages[key]);
   };
 
   const setCustomError = (text) => {
-    setNotice({ type: "error", text });
+    pushLog("error", "错误", text);
   };
 
   const isBusy = Boolean(generatingKind) || automationRunning;
+
+  const positionPopup = () => {
+    const trigger = topMenuTriggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    setPopupPosition({
+      top: rect.top - 4,
+      left: rect.right + 12,
+    });
+  };
+
+  useEffect(() => {
+    if (!topMenuOpen) return undefined;
+    positionPopup();
+    const handlePointerDown = (event) => {
+      if (topMenuRef.current && !topMenuRef.current.contains(event.target)) {
+        setTopMenuOpen(false);
+      }
+    };
+    const handleReposition = () => positionPopup();
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    window.addEventListener("resize", handleReposition);
+    window.addEventListener("scroll", handleReposition, true);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      window.removeEventListener("resize", handleReposition);
+      window.removeEventListener("scroll", handleReposition, true);
+    };
+  }, [topMenuOpen]);
+
+  useEffect(() => {
+    if (!noteDetail) return undefined;
+    const total = new Set(
+      [noteDetail.coverUrl, ...(noteDetail.images || [])].filter(Boolean),
+    ).size;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeNoteDetail();
+      } else if (event.key === "ArrowLeft" && total > 1) {
+        setCarouselIndex((current) => (current - 1 + total) % total);
+      } else if (event.key === "ArrowRight" && total > 1) {
+        setCarouselIndex((current) => (current + 1) % total);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [noteDetail]);
+
+  const clearHoverTimer = () => {
+    if (hoverCloseTimer.current) {
+      clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = null;
+    }
+  };
+
+  const handleMenuEnter = () => {
+    clearHoverTimer();
+    if (!topMenuOpen) {
+      positionPopup();
+      setTopMenuOpen(true);
+    }
+  };
+
+  const handleMenuLeave = () => {
+    clearHoverTimer();
+    hoverCloseTimer.current = setTimeout(() => setTopMenuOpen(false), 140);
+  };
 
   const updateModelConfig = (channel, value) => {
     setModelConfig((current) => ({ ...current, [channel]: value }));
@@ -511,8 +594,6 @@ export function App() {
         generatedAt: result.generatedAt,
         code: availableLabels.length ? "" : "LOCAL_CLI_UNAVAILABLE",
       });
-      if (availableLabels.length) setSuccess(text);
-      else setCustomError(text);
     } catch (error) {
       const message = error?.message || "本机 CLI 检测失败。";
       setCliDetectionState("error");
@@ -785,7 +866,6 @@ export function App() {
         generatedAt: result.generatedAt,
         code: "",
       });
-      setSuccess(`已通过本机 xhs 搜索「${trimmedKeyword}」，结果尚未自动入库。`);
     } catch (error) {
       const message = error?.message || "小红书热门内容搜索失败。";
       setSearchResults([]);
@@ -819,6 +899,39 @@ export function App() {
     setCoverImage(null);
   };
 
+  const openNoteDetail = async (result) => {
+    if (!result?.noteId) {
+      setDetailError("该结果缺少笔记 ID，无法加载详情。");
+      setNoteDetail({ fallback: result });
+      return;
+    }
+    setDetailLoading(true);
+    setDetailError("");
+    setCarouselIndex(0);
+    setNoteDetail(null);
+    try {
+      const detail = await requestXhsNote({
+        noteId: result.noteId,
+        xsecToken: result.xsecToken || "",
+      });
+      setNoteDetail(detail);
+      pushLog("info", "笔记详情", `已加载「${detail.title}」。`);
+    } catch (error) {
+      const message = error?.message || "笔记详情加载失败。";
+      setDetailError(message);
+      setNoteDetail({ fallback: result });
+      setCustomError(message);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeNoteDetail = () => {
+    setNoteDetail(null);
+    setDetailError("");
+    setDetailLoading(false);
+  };
+
   const toggleSearchResult = (id) => {
     setSelectedSearchIds((current) =>
       current.includes(id) ? current.filter((itemId) => itemId !== id) : [...current, id],
@@ -837,7 +950,7 @@ export function App() {
       return [...current, ...selectedItems.filter((item) => !existingIds.has(item.id))];
     });
     setActiveStep("rag");
-    setSuccess(`已加入 ${selectedItems.length} 条参考内容到本地 RAG。`);
+    pushLog("success", "RAG 入库", `已加入 ${selectedItems.length} 条参考内容到本地 RAG。`);
   };
 
   const generateTopics = async () => {
@@ -859,7 +972,6 @@ export function App() {
     setSelectedPromptId(null);
     setCoverImage(null);
     setActiveStep("topics");
-    setSuccess(`已通过 ${result.routeLabel} 生成 10 个选题。`);
   };
 
   const generateDrafts = async () => {
@@ -879,7 +991,6 @@ export function App() {
     setSelectedPromptId(null);
     setCoverImage(null);
     setActiveStep("drafts");
-    setSuccess(`已通过 ${result.routeLabel} 生成 5 篇文案，可选择一篇继续生成封面 Prompt。`);
   };
 
   const generatePrompts = async () => {
@@ -900,7 +1011,6 @@ export function App() {
     setSelectedPromptId(nextPrompts[0].id);
     setCoverImage(null);
     setActiveStep("cover");
-    setSuccess(`已通过 ${result.routeLabel} 生成 5 份封面 Prompt，默认不包含真人、脸、手和动物。`);
   };
 
   const generateCoverImage = async (promptId = selectedPromptId) => {
@@ -945,7 +1055,6 @@ export function App() {
         code: "",
       });
       setActiveStep("cover");
-      setSuccess(`已通过 ${routeLabel} 生成封面图，原始 Prompt 已保留。`);
     } catch (error) {
       const message = error?.message || `${routeLabel}封面图生成失败。`;
       setCliStatus({
@@ -964,6 +1073,10 @@ export function App() {
   };
 
   const runAutomation = async () => {
+    if (!automationEnabled) {
+      setCustomError("自动化生成总开关已关闭，请先在菜单中开启后再执行。");
+      return;
+    }
     let currentAutomationStage = "";
     const moveAutomationStage = (stage) => {
       currentAutomationStage = stage;
@@ -984,7 +1097,7 @@ export function App() {
 
     setAutomationRunning(true);
     resetGeneratedState();
-    setNotice({ type: "success", text: "自动化生成已开始：本次点击授权搜索、模型决策入库、生成和封面图生成。" });
+    pushLog("info", "自动化生成", "已开始：本次授权串行执行搜索、入库、生成与封面图生成。");
 
     try {
       moveAutomationStage("搜索热门内容");
@@ -1160,7 +1273,7 @@ export function App() {
         generatedAt: coverResult.generatedAt,
         code: "",
       });
-      setSuccess("自动化生成已完成：热门参考、RAG、选题、文案、封面 Prompt 和封面图均已生成并保留可见选择。");
+      pushLog("success", "自动化完成", "热门参考、RAG、选题、文案、封面 Prompt 与封面图均已生成。");
     } catch (error) {
       const message = error?.message || "自动化生成失败。";
       setCliStatus({
@@ -1180,59 +1293,164 @@ export function App() {
     }
   };
 
-  const saveDraft = () => {
+  const stampSaved = () => {
     const savedAt = nowText();
     setLastSavedAt(savedAt);
-    setSuccess(`草稿已保存到本地状态，保存时间 ${savedAt}。`);
+    return savedAt;
   };
+
+  const saveDraft = () => {
+    const savedAt = stampSaved();
+    pushLog("success", "保存草稿", `已手动保存到本地状态（${savedAt}）。`);
+  };
+
+  // 自动保存：开启后，核心字段变更后静默保存（不弹成功提示）
+  useEffect(() => {
+    if (!autoSaveEnabled) return undefined;
+    const timer = setTimeout(() => {
+      stampSaved();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [autoSaveEnabled, persona, keyword, writingBrief]);
+
+  // 每次操作终态（成功/失败）写入日志，倒序展示
+  useEffect(() => {
+    if (cliStatus.state !== "success" && cliStatus.state !== "error") return;
+    if (lastLoggedStatusRef.current === cliStatus) return;
+    lastLoggedStatusRef.current = cliStatus;
+    pushLog(cliStatus.state, cliStatus.label, cliStatus.text, {
+      durationMs: cliStatus.durationMs,
+      code: cliStatus.code,
+    });
+  }, [cliStatus]);
 
   return (
     <div className="app-root" aria-label="薄荷工坊新版小红书 AI 助理">
-      <header className="app-top-bar" data-region="global-action-bar">
-        <button
-          className="top-bar-toggle"
-          type="button"
-          onClick={() => setShowTopActions((v) => !v)}
-          aria-expanded={showTopActions}
-          aria-label={showTopActions ? "隐藏操作" : "展开操作"}
-        >
-          <SoftIcon tone="mint">☰</SoftIcon>
-          <span>{showTopActions ? "收起" : "操作"}</span>
-        </button>
-        {showTopActions ? (
-          <div className="top-bar-actions">
-            <button className="ghost-button" disabled={isBusy} type="button" onClick={saveDraft}>
-              保存
-            </button>
-            <button
-              className="primary-button"
-              disabled={isBusy}
-              type="button"
-              onClick={runAutomation}
-            >
-              {automationRunning ? "自动化中..." : "自动化生成"}
-            </button>
-          </div>
-        ) : null}
-      </header>
-
       <aside className="app-sidebar" data-region="workflow-sidebar">
-        <div className="sidebar-brand">
-          <SoftIcon tone="mint">叶</SoftIcon>
-          <div>
-            <div className="sidebar-brand-title">薄荷工坊</div>
-            <div className="sidebar-brand-subtitle">Mint Atelier</div>
+        <div
+          ref={topMenuRef}
+          className={`sidebar-brand-menu ${topMenuOpen ? "open" : ""}`}
+          onMouseEnter={handleMenuEnter}
+          onMouseLeave={handleMenuLeave}
+        >
+          <div className="sidebar-brand">
+            <button
+              ref={topMenuTriggerRef}
+              className="brand-trigger"
+              type="button"
+              onClick={() => setTopMenuOpen((v) => !v)}
+              aria-expanded={topMenuOpen}
+              aria-haspopup="menu"
+              aria-label="操作菜单"
+            >
+              <SoftIcon tone="mint">叶</SoftIcon>
+            </button>
+            <div>
+              <div className="sidebar-brand-title">薄荷工坊</div>
+              <div className="sidebar-brand-subtitle">Mint Atelier</div>
+            </div>
           </div>
+          {topMenuOpen && popupPosition ? (
+            <div
+              className="sidebar-popup"
+              style={{
+                top: popupPosition.top,
+                left: popupPosition.left,
+              }}
+              role="menu"
+              aria-label="草稿操作"
+            >
+              <div className={`popup-automation ${autoSaveEnabled ? "on" : "off"}`}>
+                <button
+                  className="automation-main"
+                  disabled={isBusy}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    if (!autoSaveEnabled) {
+                      setAutoSaveEnabled(true);
+                      return;
+                    }
+                    saveDraft();
+                    setTopMenuOpen(false);
+                  }}
+                >
+                  <SoftIcon tone={autoSaveEnabled ? "mint" : "muted"}>存</SoftIcon>
+                  <span className="automation-text">
+                    <strong>保存草稿</strong>
+                    <small>
+                      {isBusy
+                        ? "正在生成内容…"
+                        : autoSaveEnabled
+                          ? lastSavedAt
+                            ? `已自动保存 ${lastSavedAt}`
+                            : "编辑后自动保存"
+                          : "自动保存已关闭，点击开启"}
+                    </small>
+                  </span>
+                </button>
+                <label
+                  className="automation-switch"
+                  title={autoSaveEnabled ? "关闭自动保存" : "开启自动保存"}
+                >
+                  <span className={`switch ${autoSaveEnabled ? "on" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={autoSaveEnabled}
+                      onChange={(event) => setAutoSaveEnabled(event.target.checked)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label="自动保存开关"
+                    />
+                    <i />
+                  </span>
+                </label>
+              </div>
+              <div className={`popup-automation ${automationEnabled ? "on" : "off"}`}>
+                <button
+                  className="automation-main"
+                  disabled={isBusy}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    if (!automationEnabled) {
+                      setAutomationEnabled(true);
+                      return;
+                    }
+                    setTopMenuOpen(false);
+                    runAutomation();
+                  }}
+                >
+                  <SoftIcon tone={automationEnabled ? "mint" : "muted"}>动</SoftIcon>
+                  <span className="automation-text">
+                    <strong>{automationRunning ? "自动化中..." : "自动化生成"}</strong>
+                    <small>
+                      {automationRunning
+                        ? "正在串行执行创作流程"
+                        : automationEnabled
+                          ? "点击开始一键串行执行"
+                          : "已关闭，点击此处开启"}
+                    </small>
+                  </span>
+                </button>
+                <label
+                  className="automation-switch"
+                  title={automationEnabled ? "关闭自动化生成" : "开启自动化生成"}
+                >
+                  <span className={`switch ${automationEnabled ? "on" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={automationEnabled}
+                      onChange={(event) => setAutomationEnabled(event.target.checked)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label="自动化生成总开关"
+                    />
+                    <i />
+                  </span>
+                </label>
+              </div>
+            </div>
+          ) : null}
         </div>
-
-        <section className="profile-card">
-          <img src="/assets/avatar-creator.png" alt="薄荷小丸子头像" />
-          <div>
-            <h2>薄荷小丸子</h2>
-            <span>内容创作助理</span>
-            <p><i /> 本地草稿</p>
-          </div>
-        </section>
 
         <section className="flow-nav" aria-label="创作流程">
           <header>
@@ -1382,6 +1600,17 @@ export function App() {
                         ))}
                       </b>
                     </span>
+                    <button
+                      className="detail-button"
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openNoteDetail(result);
+                      }}
+                    >
+                      详情
+                    </button>
                   </label>
                 ))
               )}
@@ -1646,67 +1875,220 @@ export function App() {
           </article>
         </section>
 
-        <section className={`notice-card card ${notice.type}`}>
-          <header>
-            <div>
-              <SoftIcon tone={notice.type === "error" ? "rose" : "mint"}>
-                {notice.type === "error" ? "!" : "i"}
-              </SoftIcon>
-              <span>
-                <h2>状态与错误提示</h2>
-                <p>{notice.type === "error" ? "需处理" : "正常"}</p>
-              </span>
+        <section className="card log-card">
+          <header className="log-card-header">
+            <div className="log-card-title">
+              <SoftIcon tone="mint">志</SoftIcon>
+              <div>
+                <h2>操作日志</h2>
+                <p>{logs.length ? `最近 ${logs.length} 条，最新在上` : "操作记录会显示在这里"}</p>
+              </div>
             </div>
-            <StageBadge tone={notice.type === "error" ? "rose" : "mint"}>
-              {notice.type === "error" ? "需处理" : "正常"}
-            </StageBadge>
-          </header>
-          <p>{notice.text}</p>
-          <div className="manual-boundary">
-            <span>搜索</span>
-            <span>入库</span>
-            <span>生成</span>
-            <span>封面</span>
-            <strong>{automationRunning ? `自动化：${automationStage}` : "手动逐步或自动化一次确认"}</strong>
-          </div>
-          <div className={`cli-status ${cliStatus.state}`}>
-            <span>{cliStatus.label}</span>
-            <p>{cliStatus.text}</p>
-            {cliStatus.commandPreview ? <code>{cliStatus.commandPreview}</code> : null}
-            {cliStatus.durationMs ? (
-              <small>{Math.round(cliStatus.durationMs / 1000)}s · {new Date(cliStatus.generatedAt).toLocaleString("zh-CN")}</small>
+            {logs.length > 0 ? (
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => setLogs([])}
+              >
+                清空
+              </button>
             ) : null}
-            {cliStatus.code ? <small>{cliStatus.code}</small> : null}
-          </div>
+          </header>
 
-          <div className="error-lab">
-            <h3>错误覆盖</h3>
-            <div>
-              {Object.entries({
-                search: "搜索失败",
-                rag: "RAG 失败",
-                topics: "选题失败",
-                drafts: "文案失败",
-                prompts: "Prompt 失败",
-                image: "封面失败",
-                config: "配置缺失",
-                key: "Key 无效",
-                cli: "CLI 不可用",
-                network: "网络失败",
-              }).map(([key, label]) => (
-                <button key={key} type="button" onClick={() => setError(key)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ul className="log-list">
+            {cliStatus.state === "running" ? (
+              <li className="log-item running">
+                <span className="log-dot" />
+                <div className="log-body">
+                  <strong>{cliStatus.label}</strong>
+                  <p>{cliStatus.text}</p>
+                </div>
+                <span className="log-time">进行中</span>
+              </li>
+            ) : null}
+
+            {logs.length === 0 && cliStatus.state !== "running" ? (
+              <li className="log-empty">
+                <SoftIcon tone="muted">i</SoftIcon>
+                <span>还没有操作记录，点击搜索、生成或自动化后会显示在这里。</span>
+              </li>
+            ) : (
+              logs.map((log) => (
+                <li key={log.id} className={`log-item ${log.type}`}>
+                  <span className="log-dot" />
+                  <div className="log-body">
+                    <strong>{log.label}</strong>
+                    <p>{log.text}</p>
+                    {log.code ? <code>{log.code}</code> : null}
+                  </div>
+                  <div className="log-meta">
+                    <span className="log-time">{log.time}</span>
+                    {log.durationMs ? (
+                      <span className="log-duration">{(log.durationMs / 1000).toFixed(1)}s</span>
+                    ) : null}
+                  </div>
+                </li>
+              ))
+            )}
+          </ul>
         </section>
 
         <footer className="app-footer">
           <span>已加载新版阶段式工作台，支持账号人设、搜索、RAG、选题、文案与封面一站式创作。</span>
-          <span>{cliStatus.text}</span>
+          <span>{cliStatus.state === "running" ? cliStatus.text : logs[0]?.text ?? "等待操作。"}</span>
         </footer>
       </main>
+
+      {noteDetail ? (
+        <div
+          className="note-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="笔记详情"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeNoteDetail();
+          }}
+        >
+          <div className="note-modal">
+            <button
+              className="note-modal-close"
+              type="button"
+              onClick={closeNoteDetail}
+              aria-label="关闭详情"
+            >
+              ×
+            </button>
+
+            {detailLoading ? (
+              <div className="note-modal-loading">
+                <span className="note-spinner" />
+                <p>正在加载笔记详情…</p>
+              </div>
+            ) : (
+              <>
+                {(() => {
+                  const merged = [];
+                  const seen = new Set();
+                  [noteDetail.coverUrl, ...(noteDetail.images || [])].forEach((url) => {
+                    if (url && !seen.has(url)) {
+                      seen.add(url);
+                      merged.push(url);
+                    }
+                  });
+                  if (!merged.length) return null;
+                  const total = merged.length;
+                  const current = Math.min(carouselIndex, total - 1);
+                  const go = (next) => setCarouselIndex((next + total) % total);
+                  return (
+                    <div className="note-carousel">
+                      <div className="note-carousel-track">
+                        {merged.map((url, index) => (
+                          <figure
+                            key={index}
+                            className={index === current ? "note-carousel-slide is-active" : "note-carousel-slide"}
+                            aria-hidden={index !== current}
+                          >
+                            <img src={url} alt={`${noteDetail.title || "笔记"} 图 ${index + 1}`} />
+                            {noteDetail.type === "video" && index === 0 ? (
+                              <span className="note-type-badge">视频</span>
+                            ) : null}
+                          </figure>
+                        ))}
+                      </div>
+                      {total > 1 ? (
+                        <>
+                          <button
+                            type="button"
+                            className="note-carousel-arrow is-prev"
+                            aria-label="上一张"
+                            onClick={() => go(current - 1)}
+                          >
+                            ‹
+                          </button>
+                          <button
+                            type="button"
+                            className="note-carousel-arrow is-next"
+                            aria-label="下一张"
+                            onClick={() => go(current + 1)}
+                          >
+                            ›
+                          </button>
+                          <div className="note-carousel-dots">
+                            {merged.map((_, index) => (
+                              <button
+                                key={index}
+                                type="button"
+                                className={index === current ? "is-active" : ""}
+                                aria-label={`第 ${index + 1} 张`}
+                                onClick={() => setCarouselIndex(index)}
+                              />
+                            ))}
+                          </div>
+                          <span className="note-carousel-counter">{current + 1} / {total}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+
+                <div className="note-modal-body">
+                  <h2>{noteDetail.title || noteDetail.fallback?.title || "笔记详情"}</h2>
+
+                  <div className="note-author-row">
+                    <strong>{noteDetail.author || noteDetail.fallback?.author || "未知作者"}</strong>
+                    {noteDetail.ipLocation ? <span>IP {noteDetail.ipLocation}</span> : null}
+                    {noteDetail.publishedAt ? <span>{noteDetail.publishedAt}</span> : null}
+                    {noteDetail.type && !noteDetail.coverUrl ? (
+                      <span>{noteDetail.type === "video" ? "视频笔记" : "图文笔记"}</span>
+                    ) : null}
+                  </div>
+
+                  {detailError ? (
+                    <p className="note-modal-error">详情加载失败：{detailError}</p>
+                  ) : null}
+
+                  {noteDetail.desc ? (
+                    <p className="note-modal-desc">{noteDetail.desc}</p>
+                  ) : noteDetail.fallback?.excerpt ? (
+                    <p className="note-modal-desc">{noteDetail.fallback.excerpt}</p>
+                  ) : null}
+
+                  {noteDetail.tags?.length ? (
+                    <div className="note-modal-tags">
+                      {noteDetail.tags.map((tag) => (
+                        <i key={tag}>#{tag}</i>
+                      ))}
+                    </div>
+                  ) : noteDetail.fallback?.tags?.length ? (
+                    <div className="note-modal-tags">
+                      {noteDetail.fallback.tags.map((tag) => (
+                        <i key={tag}>#{tag}</i>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {noteDetail.metrics ? (
+                    <div className="note-modal-metrics">
+                      <span><b>赞</b>{noteDetail.metrics.liked || "—"}</span>
+                      <span><b>藏</b>{noteDetail.metrics.collected || "—"}</span>
+                      <span><b>评</b>{noteDetail.metrics.comments || "—"}</span>
+                      <span><b>转</b>{noteDetail.metrics.shares || "—"}</span>
+                    </div>
+                  ) : noteDetail.fallback?.metrics ? (
+                    <div className="note-modal-metrics">
+                      <span>{noteDetail.fallback.metrics}</span>
+                    </div>
+                  ) : null}
+
+                  {noteDetail.noteId ? (
+                    <p className="note-modal-id">笔记 ID：{noteDetail.noteId}</p>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

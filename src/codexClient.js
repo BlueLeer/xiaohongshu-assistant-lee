@@ -159,3 +159,16 @@ export async function requestXhsSearch(payload) {
     "XHS_BAD_JSON",
   );
 }
+
+export async function requestXhsNote(payload) {
+  const result = await requestJson(
+    "/api/xhs/note",
+    payload,
+    {
+      nonJson: "小红书笔记详情返回了非 JSON 内容。",
+      failed: "小红书笔记详情加载失败。",
+    },
+    "XHS_BAD_JSON",
+  );
+  return result.detail;
+}

@@ -18,8 +18,11 @@ import {
   validateDecisionRequest,
   validateRequest,
 } from "./validation.mjs";
+import { serveXhsImage } from "../xhs/imageProxy.mjs";
 import {
+  runXhsNote,
   runXhsSearch,
+  validateXhsNoteRequest,
   validateXhsSearchRequest,
 } from "../xhs/runXhs.mjs";
 import {
@@ -83,6 +86,11 @@ export function codexGenerateMiddleware() {
       return;
     }
 
+    if (requestUrl.pathname === "/api/xhs/image" && req.method === "GET") {
+      await serveXhsImage(requestUrl, res, next);
+      return;
+    }
+
     const handledPath = new Set([
       "/api/codex/generate",
       "/api/codex/decide",
@@ -95,6 +103,7 @@ export function codexGenerateMiddleware() {
       "/api/cloud/decide",
       "/api/cloud/cover-image",
       "/api/xhs/search",
+      "/api/xhs/note",
     ]);
 
     if (!handledPath.has(requestUrl.pathname)) {
@@ -136,6 +145,21 @@ export function codexGenerateMiddleware() {
           hasMore: searchResult.hasMore,
           commandPreview: searchResult.commandPreview,
           durationMs: searchResult.durationMs,
+          generatedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (requestUrl.pathname === "/api/xhs/note") {
+        const notePayload = validateXhsNoteRequest(payload);
+        const noteResult = await runXhsNote(notePayload);
+
+        sendJson(res, 200, {
+          ok: true,
+          kind: "xhsNote",
+          detail: noteResult,
+          commandPreview: noteResult.commandPreview,
+          durationMs: noteResult.durationMs,
           generatedAt: new Date().toISOString(),
         });
         return;

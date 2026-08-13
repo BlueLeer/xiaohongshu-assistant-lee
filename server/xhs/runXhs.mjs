@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexApiError } from "../codex/validation.mjs";
+import { proxifyXhsImage } from "./imageProxy.mjs";
 
 const DEFAULT_XHS_CLI_COMMAND = "xhs";
 const DEFAULT_COOKIE_SOURCE = "none";
@@ -215,6 +216,7 @@ function normalizeSearchItem(item, index, payload, lookupTime) {
     metrics: formatMetrics(interactInfo),
     source: noteId ? `search_result/${noteId}` : `search_result/${payload.page}-${index + 1}`,
     noteId,
+    xsecToken: pickString(item, ["xsec_token", "xsecToken"]),
     noteType,
     author: clip(pickString(user, ["nickname", "nick_name", "name"]) || "未知作者", 40),
     keyword: payload.keyword,
@@ -242,6 +244,169 @@ function normalizeSearchData(envelope, payload, startedAt) {
       .map((item, index) => normalizeSearchItem(item, index, payload, lookupTime))
       .filter((item) => item.title || item.noteId),
     hasMore: Boolean(envelope.data.has_more),
+  };
+}
+
+function formatTimestamp(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  const ms = num < 1e12 ? num * 1000 : num;
+  try {
+    return new Date(ms).toLocaleString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function pickImageUrl(image) {
+  if (!assertObject(image)) return "";
+  return (
+    pickString(image, ["url_default", "url_pre", "url"]) ||
+    pickString(image?.info_list?.[0], ["url"]) ||
+    ""
+  );
+}
+
+function normalizeNoteDetail(envelope, noteId) {
+  if (!assertObject(envelope)) {
+    throw new CodexApiError("XHS_BAD_JSON", "xhs CLI 详情 JSON 必须是对象。", 502);
+  }
+  if (envelope.ok === false) {
+    mapCliError(envelope.error);
+  }
+  if (envelope.ok !== true || !assertObject(envelope.data)) {
+    throw new CodexApiError("XHS_BAD_JSON", "xhs CLI 详情缺少 ok/data 字段。", 502);
+  }
+
+  const items = Array.isArray(envelope.data.items) ? envelope.data.items : [];
+  const card =
+    items.find((item) => assertObject(item?.note_card))?.note_card ||
+    (assertObject(envelope.data.note_card) ? envelope.data.note_card : null) ||
+    envelope.data;
+  if (!assertObject(card)) {
+    throw new CodexApiError("XHS_NOTE_NOT_FOUND", "未获取到该笔记的详情。", 404);
+  }
+
+  const user = assertObject(card.user) ? card.user : {};
+  const interactInfo = assertObject(card.interact_info) ? card.interact_info : {};
+  const images = Array.isArray(card.image_list) ? card.image_list : [];
+  const desc = pickString(card, ["desc", "description", "content"]);
+  const rawType = pickString(card, ["type", "note_type"]);
+  const hasVideo = Boolean(card.video) || /video/i.test(rawType);
+
+  return {
+    noteId: pickString(card, ["note_id"]) || noteId,
+    title: clip(pickString(card, ["title", "display_title"]) || "无标题笔记", 120),
+    desc,
+    type: hasVideo ? "video" : "image",
+    author: clip(pickString(user, ["nickname", "nick_name", "name"]) || "未知作者", 40),
+    authorId: pickString(user, ["user_id", "id", "red_id"]),
+    ipLocation: pickString(card, ["ip_location"]),
+    publishedAt: formatTimestamp(card.time),
+    updatedAt: formatTimestamp(card.last_update_time),
+    tags: normalizeTags(card),
+    metrics: {
+      liked: formatCount(pickMetric(interactInfo, ["liked_count", "like_count", "liked", "likes"])),
+      collected: formatCount(pickMetric(interactInfo, ["collected_count", "collect_count", "collected"])),
+      comments: formatCount(pickMetric(interactInfo, ["comment_count", "comments"])),
+      shares: formatCount(pickMetric(interactInfo, ["share_count", "shared_count", "shares"])),
+    },
+    imageCount: images.length,
+    coverUrl: proxifyXhsImage(pickImageUrl(images[0])),
+    images: images
+      .map((image) => proxifyXhsImage(pickImageUrl(image)))
+      .filter(Boolean)
+      .slice(0, 9),
+  };
+}
+
+export function validateXhsNoteRequest(payload) {
+  if (!assertObject(payload)) {
+    throw new CodexApiError("BAD_REQUEST", "请求体必须是 JSON 对象。");
+  }
+  const noteId = safeString(payload.noteId);
+  if (!noteId) {
+    throw new CodexApiError("BAD_REQUEST", "缺少笔记 ID。");
+  }
+  const xsecToken = safeString(payload.xsecToken);
+  return { noteId, xsecToken };
+}
+
+export async function runXhsNote(payload) {
+  const cliCommand = process.env.XHS_CLI_COMMAND || DEFAULT_XHS_CLI_COMMAND;
+  const cookieSource = process.env.XHS_COOKIE_SOURCE || DEFAULT_COOKIE_SOURCE;
+  const args = ["--cookie-source", cookieSource, "read", payload.noteId, "--json"];
+  if (payload.xsecToken) {
+    args.push("--xsec-token", payload.xsecToken);
+  }
+  const startedAtMs = Date.now();
+
+  const envelope = await new Promise((resolve, reject) => {
+    const child = spawn(cliCommand, args, {
+      cwd: repoRoot,
+      env: { ...process.env, OUTPUT: "json" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new CodexApiError("XHS_FAILED", "xhs CLI 读取详情超时，请稍后重试。", 504));
+    }, TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new CodexApiError("XHS_CLI_UNAVAILABLE", `无法启动 xhs CLI：${error.message}`, 503));
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        const parsed = parseJsonOutput(stdout);
+        if (code !== 0 && parsed.ok !== true) mapCliError(parsed.error);
+        resolve(parsed);
+      } catch (error) {
+        if (error instanceof CodexApiError) {
+          reject(error);
+          return;
+        }
+        reject(
+          new CodexApiError(
+            "XHS_FAILED",
+            `xhs CLI 读取详情失败，退出码 ${code}。`,
+            502,
+            sanitizeDetails(stderr || stdout),
+          ),
+        );
+      }
+    });
+  });
+
+  const detail = normalizeNoteDetail(envelope, payload.noteId);
+  return {
+    ...detail,
+    commandPreview: commandPreview(cliCommand, args),
+    durationMs: Date.now() - startedAtMs,
   };
 }
 
