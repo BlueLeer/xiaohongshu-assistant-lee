@@ -1,14 +1,17 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { codexGenerateMiddleware } from "./server/codex/api.mjs";
+import { storeMiddleware } from "./server/store/routes.mjs";
 
 function localGenerationApiPlugin() {
   return {
     name: "local-generation-api",
     configureServer(server) {
+      server.middlewares.use(storeMiddleware());
       server.middlewares.use(codexGenerateMiddleware());
     },
     configurePreviewServer(server) {
+      server.middlewares.use(storeMiddleware());
       server.middlewares.use(codexGenerateMiddleware());
     },
   };

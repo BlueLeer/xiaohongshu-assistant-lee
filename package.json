@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:lan": "vite --host",
     "dev:fixed": "vite --host 127.0.0.1 --port 52880 --strictPort",
     "build": "vite build",
     "test": "node --test server/codex/cloudProvider.test.mjs",

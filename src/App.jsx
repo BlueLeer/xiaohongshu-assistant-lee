@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   requestCloudCoverImage,
   requestCloudDecision,
@@ -391,6 +391,10 @@ export function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugData, setDebugData] = useState(null);
+  const [debugTab, setDebugTab] = useState("workspace");
   const [generatingKind, setGeneratingKind] = useState("");
   const [automationRunning, setAutomationRunning] = useState(false);
   const [automationStage, setAutomationStage] = useState("");
@@ -944,6 +948,59 @@ export function App() {
     setDetailLoading(false);
   };
 
+  const openDebugStore = useCallback(async () => {
+    setDebugOpen(true);
+    setDebugLoading(true);
+    setDebugData(null);
+    try {
+      const [ws, hist, model, health] = await Promise.all([
+        fetch("/api/store/workspace").then((r) => r.json()),
+        fetch("/api/store/history").then((r) => r.json()),
+        fetch("/api/store/model").then((r) => r.json()),
+        fetch("/api/store/health").then((r) => r.json()),
+      ]);
+      setDebugData({
+        dbPath: health.dbPath || "",
+        workspace: ws.workspace || {},
+        workspaceSavedAt: ws.savedAt || "",
+        history: Array.isArray(hist.items) ? hist.items : [],
+        model: model.config || {},
+      });
+    } catch (error) {
+      setDebugData({ error: error?.message || "加载数据库内容失败。" });
+    } finally {
+      setDebugLoading(false);
+    }
+  }, []);
+
+  const closeDebugStore = useCallback(() => {
+    setDebugOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!debugOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") closeDebugStore();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [debugOpen, closeDebugStore]);
+
+  const exportDebugJson = () => {
+    if (!debugData) return;
+    const blob = new Blob([JSON.stringify(debugData, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mint-atelier-store-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const importCoverImage = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1436,22 +1493,64 @@ export function App() {
     });
   }, [cliStatus]);
 
-  const workspaceSavedAt = useWorkspaceDraft({
-    persona,
-    keyword,
-    writingBrief,
-    searchResults,
-    selectedSearchIds,
-    ragItems,
-    topics,
-    selectedTopicId,
-    drafts,
-    selectedDraftId,
-    prompts,
-    selectedPromptId,
-    // Generated files live in a temporary server directory. Keep their metadata,
-    // but allow the UI to fall back gracefully if a previous server has stopped.
-    coverImage,
+  const workspace = useMemo(
+    () => ({
+      persona,
+      keyword,
+      writingBrief,
+      searchResults,
+      selectedSearchIds,
+      ragItems,
+      topics,
+      selectedTopicId,
+      drafts,
+      selectedDraftId,
+      prompts,
+      selectedPromptId,
+      // Generated files live in a temporary server directory. Keep their metadata,
+      // but allow the UI to fall back gracefully if a previous server has stopped.
+      coverImage,
+    }),
+    [
+      persona,
+      keyword,
+      writingBrief,
+      searchResults,
+      selectedSearchIds,
+      ragItems,
+      topics,
+      selectedTopicId,
+      drafts,
+      selectedDraftId,
+      prompts,
+      selectedPromptId,
+      coverImage,
+    ],
+  );
+
+  // Hydrate the workspace from the SQLite database once on mount.
+  const restoredRef = useRef(false);
+  const handleWorkspaceRestored = useCallback((draft) => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    setPersona(draft.persona ?? defaultPersona);
+    setKeyword(draft.keyword ?? defaultKeyword);
+    setWritingBrief(draft.writingBrief ?? defaultBrief);
+    setSearchResults(draft.searchResults || []);
+    setSelectedSearchIds(draft.selectedSearchIds || []);
+    setRagItems(draft.ragItems || []);
+    setTopics(draft.topics || []);
+    setSelectedTopicId(draft.selectedTopicId ?? null);
+    setDrafts(draft.drafts || []);
+    setSelectedDraftId(draft.selectedDraftId ?? null);
+    setPrompts(draft.prompts || []);
+    setSelectedPromptId(draft.selectedPromptId ?? null);
+    setCoverImage(draft.coverImage || null);
+    setLastSavedAt(draft.savedAt ? nowText() : "");
+  }, []);
+
+  const workspaceSavedAt = useWorkspaceDraft(workspace, {
+    onRestored: handleWorkspaceRestored,
   });
 
   return (
@@ -1578,6 +1677,21 @@ export function App() {
                   </span>
                 </label>
               </div>
+              <button
+                className="popup-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setTopMenuOpen(false);
+                  openDebugStore();
+                }}
+              >
+                <SoftIcon tone="muted">据</SoftIcon>
+                <span className="automation-text">
+                  <strong>数据调试</strong>
+                  <small>查看与导出本地数据库</small>
+                </span>
+              </button>
             </div>
           ) : null}
         </div>
@@ -2270,6 +2384,110 @@ export function App() {
           </div>
         </div>
       ) : null}
+
+      {debugOpen ? (
+        <div
+          className="note-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="数据调试"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDebugStore();
+          }}
+        >
+          <div className="debug-modal">
+            <button
+              className="note-modal-close"
+              type="button"
+              onClick={closeDebugStore}
+              aria-label="关闭"
+            >
+              ×
+            </button>
+            <div className="debug-modal-header">
+              <h2>本地数据库调试</h2>
+              {debugData?.dbPath ? (
+                <span className="debug-dbpath" title={debugData.dbPath}>
+                  {debugData.dbPath}
+                </span>
+              ) : null}
+            </div>
+
+            {debugLoading ? (
+              <div className="note-modal-loading">
+                <span className="note-spinner" />
+                <p>正在读取数据库…</p>
+              </div>
+            ) : debugData?.error ? (
+              <p className="note-modal-error">{debugData.error}</p>
+            ) : debugData ? (
+              <>
+                <div className="debug-tabs">
+                  {[
+                    { key: "workspace", label: `工作区草稿` },
+                    { key: "history", label: `历史快照 (${debugData.history.length})` },
+                    { key: "model", label: "模型配置" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={debugTab === tab.key ? "is-active" : ""}
+                      onClick={() => setDebugTab(tab.key)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="debug-export"
+                    onClick={exportDebugJson}
+                  >
+                    导出 JSON
+                  </button>
+                </div>
+                <div className="debug-modal-body">
+                  {debugTab === "workspace" ? (
+                    <DebugJson
+                      data={debugData.workspace}
+                      hint={`最后保存：${debugData.workspaceSavedAt || "—"}`}
+                    />
+                  ) : null}
+                  {debugTab === "history" ? (
+                    debugData.history.length === 0 ? (
+                      <p className="debug-empty">暂无历史快照。</p>
+                    ) : (
+                      <DebugJson data={debugData.history} />
+                    )
+                  ) : null}
+                  {debugTab === "model" ? (
+                    <DebugJson data={debugData.model} hint="包含 API 密钥，以明文存储于本地数据库。" />
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DebugJson({ data, hint }) {
+  const text = JSON.stringify(data, null, 2);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard can be unavailable; the text is already visible.
+    }
+  };
+  return (
+    <div className="debug-json">
+      <div className="debug-json-bar">
+        <span>{hint || `共 ${text.length.toLocaleString()} 个字符`}</span>
+        <button type="button" onClick={copy}>复制</button>
+      </div>
+      <pre>{text}</pre>
     </div>
   );
 }
