@@ -917,6 +917,42 @@ export function App() {
     }
   };
 
+  const [confirmDialog, setConfirmDialog] = useState(null);
+
+  const openConfirm = ({ title, description, confirmText = "确认", danger = false, onConfirm }) => {
+    setConfirmDialog({ title, description, confirmText, danger, onConfirm });
+  };
+
+  const closeConfirm = () => setConfirmDialog(null);
+
+  useEffect(() => {
+    if (!confirmDialog) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setConfirmDialog(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmDialog]);
+
+  const resolveConfirm = () => {
+    const { onConfirm } = confirmDialog || {};
+    setConfirmDialog(null);
+    if (typeof onConfirm === "function") onConfirm();
+  };
+
+  const confirmResetGeneratedState = () => {
+    openConfirm({
+      title: "清空生成结果？",
+      description: "将清空搜索结果、参考内容、选题、文案、封面提示词与封面图。此操作不可撤销。",
+      confirmText: "清空",
+      danger: true,
+      onConfirm: () => {
+        resetGeneratedState();
+        pushLog("info", "已清空生成结果", "搜索结果、参考内容、选题、文案与封面已重置。");
+      },
+    });
+  };
+
   const resetGeneratedState = () => {
     setSearchResults([]);
     setSelectedSearchIds([]);
@@ -1776,14 +1812,23 @@ export function App() {
           </header>
           {history.length === 0 ? <p className="history-empty">手动保存后，可在这里回看完整创作内容。</p> : history.map((project) => (
             <div key={project.id} className="history-item">
-              <button className="project" type="button" onClick={() => { loadHistory(project); closeMobileNav(); }}>
+              <button className="project" type="button" title={`${project.title}\n${project.meta} · ${new Date(project.savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`} onClick={() => { loadHistory(project); closeMobileNav(); }}>
                 <SoftIcon tone="mint">稿</SoftIcon>
                 <span>
                   <strong>{project.title}</strong>
                   <small>{project.meta} · {new Date(project.savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small>
                 </span>
               </button>
-              <button className="history-remove" type="button" aria-label={`删除历史草稿 ${project.title}`} onClick={() => removeSnapshot(project.id)}>×</button>
+              <button className="history-remove" type="button" aria-label={`删除历史草稿 ${project.title}`} onClick={() => openConfirm({
+                title: "删除这条历史草稿？",
+                description: `「${project.title}」删除后不可恢复。`,
+                confirmText: "删除",
+                danger: true,
+                onConfirm: () => {
+                  removeSnapshot(project.id);
+                  pushLog("info", "已删除历史草稿", project.title);
+                },
+              })}>×</button>
             </div>
           ))}
         </section>
@@ -1811,7 +1856,7 @@ export function App() {
               </div>
               <div className="workspace-actions">
                 <span className="save-hint">{lastSavedAt ? `已保存 ${lastSavedAt}` : workspaceSavedAt ? "已恢复本地草稿" : "本地草稿会自动保存"}</span>
-                <button className="ghost-button small" type="button" onClick={resetGeneratedState} disabled={isBusy}>
+                <button className="ghost-button small" type="button" onClick={confirmResetGeneratedState} disabled={isBusy}>
                   清空生成结果
                 </button>
               </div>
@@ -2280,6 +2325,32 @@ export function App() {
           <span>{cliStatus.state === "running" ? cliStatus.text : logs[0]?.text ?? "等待操作。"}</span>
         </footer>
       </main>
+
+      {confirmDialog ? (
+        <div
+          className="confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={confirmDialog.title}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeConfirm();
+          }}
+        >
+          <div className="confirm-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <div className={`confirm-icon ${confirmDialog.danger ? "danger" : ""}`} aria-hidden="true">
+              {confirmDialog.danger ? "!" : "?"}
+            </div>
+            <h3>{confirmDialog.title}</h3>
+            <p>{confirmDialog.description}</p>
+            <div className="confirm-actions">
+              <button className="ghost-button" type="button" onClick={closeConfirm}>取消</button>
+              <button className={confirmDialog.danger ? "danger-button" : "primary-button"} type="button" onClick={resolveConfirm} autoFocus>
+                {confirmDialog.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {noteDetail ? (
         <div
