@@ -365,6 +365,7 @@ export function App() {
   const topMenuRef = useRef(null);
   const topMenuTriggerRef = useRef(null);
   const hoverCloseTimer = useRef(null);
+  const carouselTouchRef = useRef(null);
   const [persona, setPersona] = useStoredState("persona", defaultPersona);
   const [keyword, setKeyword] = useStoredState("keyword", defaultKeyword);
   const [writingBrief, setWritingBrief] = useStoredState("writingBrief", defaultBrief);
@@ -395,6 +396,7 @@ export function App() {
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugData, setDebugData] = useState(null);
   const [debugTab, setDebugTab] = useState("workspace");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [generatingKind, setGeneratingKind] = useState("");
   const [automationRunning, setAutomationRunning] = useState(false);
   const [automationStage, setAutomationStage] = useState("");
@@ -477,6 +479,12 @@ export function App() {
   const positionPopup = () => {
     const trigger = topMenuTriggerRef.current;
     if (!trigger) return;
+    // On phones the sidebar is an off-canvas drawer; the popup is rendered
+    // inline (static CSS) so it does not need fixed coordinates.
+    if (typeof window !== "undefined" && window.innerWidth <= 768) {
+      setPopupPosition({ top: 0, left: 0 });
+      return;
+    }
     const rect = trigger.getBoundingClientRect();
     setPopupPosition({
       top: rect.top - 4,
@@ -522,6 +530,29 @@ export function App() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [noteDetail]);
+
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+
+  // Close the drawer on Escape and when the viewport grows past the mobile
+  // breakpoint; lock background scroll while it is open.
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    const onResize = () => {
+      if (window.innerWidth > 768) setMobileNavOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onResize);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onResize);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileNavOpen]);
 
   const clearHoverTimer = () => {
     if (hoverCloseTimer.current) {
@@ -1555,7 +1586,22 @@ export function App() {
 
   return (
     <div className="app-root" aria-label="薄荷工坊新版小红书 AI 助理">
-      <aside className="app-sidebar" data-region="workflow-sidebar">
+      <header className="app-mobile-topbar">
+        <button
+          className="mobile-menu-btn"
+          type="button"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="打开菜单"
+        >
+          ☰
+        </button>
+        <span className="mobile-title">薄荷工坊</span>
+        <span className="mobile-save-hint">{lastSavedAt ? `已保存 ${lastSavedAt}` : ""}</span>
+      </header>
+      <aside
+        className={`app-sidebar${mobileNavOpen ? " open" : ""}`}
+        data-region="workflow-sidebar"
+      >
         <div
           ref={topMenuRef}
           className={`sidebar-brand-menu ${topMenuOpen ? "open" : ""}`}
@@ -1602,6 +1648,7 @@ export function App() {
                     }
                     saveDraft();
                     setTopMenuOpen(false);
+                    closeMobileNav();
                   }}
                 >
                   <SoftIcon tone={autoSaveEnabled ? "mint" : "muted"}>存</SoftIcon>
@@ -1646,6 +1693,7 @@ export function App() {
                       return;
                     }
                     setTopMenuOpen(false);
+                    closeMobileNav();
                     runAutomation();
                   }}
                 >
@@ -1683,6 +1731,7 @@ export function App() {
                 role="menuitem"
                 onClick={() => {
                   setTopMenuOpen(false);
+                  closeMobileNav();
                   openDebugStore();
                 }}
               >
@@ -1708,7 +1757,7 @@ export function App() {
             <button
               key={step.id}
               className={activeStep === step.id ? "active" : ""}
-              onClick={() => toggleStep(step.id)}
+              onClick={() => { toggleStep(step.id); closeMobileNav(); }}
               type="button"
             >
               <SoftIcon tone={activeStep === step.id ? "mint" : "muted"}>{index + 1}</SoftIcon>
@@ -1727,7 +1776,7 @@ export function App() {
           </header>
           {history.length === 0 ? <p className="history-empty">手动保存后，可在这里回看完整创作内容。</p> : history.map((project) => (
             <div key={project.id} className="history-item">
-              <button className="project" type="button" onClick={() => loadHistory(project)}>
+              <button className="project" type="button" onClick={() => { loadHistory(project); closeMobileNav(); }}>
                 <SoftIcon tone="mint">稿</SoftIcon>
                 <span>
                   <strong>{project.title}</strong>
@@ -1739,11 +1788,18 @@ export function App() {
           ))}
         </section>
 
-        <button className="save-status-button" type="button" onClick={saveDraft}>
+        <button className="save-status-button" type="button" onClick={() => { saveDraft(); closeMobileNav(); }}>
           <SoftIcon tone="mint">存</SoftIcon>
           <span>{lastSavedAt ? `已保存 ${lastSavedAt}` : "保存与继续编辑"}</span>
         </button>
       </aside>
+      {mobileNavOpen ? (
+        <div
+          className="app-drawer-backdrop"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      ) : null}
 
       <main className="app-main" data-scroll-region="primary">
         <section className="hero-status">
@@ -1839,14 +1895,25 @@ export function App() {
                 </div>
               ) : (
                 searchResults.map((result) => (
-                  <label
+                  <div
                     key={result.id}
+                    role="button"
+                    tabIndex={0}
                     className={selectedSearchIds.includes(result.id) ? "search-result selected" : "search-result"}
+                    onClick={() => openNoteDetail(result)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openNoteDetail(result);
+                      }
+                    }}
                   >
                     <input
                       checked={selectedSearchIds.includes(result.id)}
                       onChange={() => toggleSearchResult(result.id)}
+                      onClick={(event) => event.stopPropagation()}
                       type="checkbox"
+                      aria-label={`选择 ${result.title}`}
                     />
                     <span>
                       <strong>{result.title}</strong>
@@ -1859,18 +1926,7 @@ export function App() {
                         ))}
                       </b>
                     </span>
-                    <button
-                      className="detail-button"
-                      type="button"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openNoteDetail(result);
-                      }}
-                    >
-                      详情
-                    </button>
-                  </label>
+                  </div>
                 ))
               )}
             </div>
@@ -2270,7 +2326,25 @@ export function App() {
                   const current = Math.min(carouselIndex, total - 1);
                   const go = (next) => setCarouselIndex((next + total) % total);
                   return (
-                    <div className="note-carousel" aria-label="笔记媒体预览">
+                    <div
+                      className="note-carousel"
+                      aria-label="笔记媒体预览"
+                      onTouchStart={(event) => {
+                        const touch = event.changedTouches[0];
+                        carouselTouchRef.current = { x: touch.clientX, y: touch.clientY };
+                      }}
+                      onTouchEnd={(event) => {
+                        const start = carouselTouchRef.current;
+                        carouselTouchRef.current = null;
+                        if (!start || total <= 1) return;
+                        const touch = event.changedTouches[0];
+                        const dx = touch.clientX - start.x;
+                        const dy = touch.clientY - start.y;
+                        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+                          go(dx < 0 ? current + 1 : current - 1);
+                        }
+                      }}
+                    >
                       <div className="note-carousel-track">
                         {merged.map((url, index) => (
                           <figure

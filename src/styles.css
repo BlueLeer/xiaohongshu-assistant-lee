@@ -76,7 +76,7 @@ button {
   position: relative;
   width: 100%;
   height: 100vh;
-  min-width: 1024px;
+  height: 100dvh;
   background: var(--mint-background);
   color: var(--mint-foreground);
 }
@@ -101,18 +101,19 @@ button {
   margin-top: 0;
   margin-left: var(--app-sidebar-width);
   height: 100vh;
+  height: 100dvh;
   min-width: 0;
   overflow-y: auto;
   padding: 24px;
 }
 
-@media (max-width: 1024px) {
-  .app-sidebar {
-    display: none;
-  }
-  .app-main {
-    margin-left: 0;
-  }
+/* Mobile top bar — hidden on desktop, shown below the drawer breakpoint. */
+.app-mobile-topbar {
+  display: none;
+}
+
+.app-drawer-backdrop {
+  display: none;
 }
 
 /* ---------- Sidebar brand ---------- */
@@ -1042,7 +1043,7 @@ button {
 
 .search-result {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 22px 1fr;
   align-items: start;
   gap: 10px;
   padding: 12px;
@@ -1228,8 +1229,8 @@ button {
 
 .topic-card {
   position: relative;
-  min-height: 150px;
-  overflow: hidden;
+  min-height: 0;
+  align-items: stretch;
 }
 
 .topic-card.selected,
@@ -1247,44 +1248,40 @@ button {
 }
 
 .topic-card strong {
-  display: -webkit-box;
+  display: block;
   margin-top: 6px;
-  overflow: hidden;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  line-height: 1.4;
 }
 
 .topic-card p {
-  display: -webkit-box;
-  margin: 6px 0 0;
-  overflow: hidden;
+  margin: 8px 0 0;
   color: var(--mint-muted-foreground);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  line-height: 1.55;
 }
 
 .topic-card small {
   display: block;
-  margin-top: 6px;
-  overflow: hidden;
+  margin-top: 8px;
   font-size: 11px;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  color: var(--mint-foreground);
 }
 
 .topic-card em {
+  display: block;
   margin-top: 8px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding-top: 8px;
+  border-top: 1px dashed var(--mint-border);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.45;
+  color: #207a68;
 }
 
 @media (max-width: 1440px) {
@@ -2547,4 +2544,252 @@ button {
   font-size: 13px;
   font-weight: 600;
   color: var(--mint-muted-foreground);
+}
+
+/* ---------- Mobile / phone adaptation (<=768px) ---------- */
+@media (max-width: 768px) {
+  /* Top bar */
+  .app-mobile-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 52px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px;
+    background: var(--mint-card);
+    border-bottom: 1px solid var(--mint-border);
+    box-shadow: var(--mint-shadow-1);
+  }
+
+  .mobile-menu-btn {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--mint-primary-subtle);
+    color: #207a68;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .mobile-title {
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--mint-foreground);
+  }
+
+  .mobile-save-hint {
+    margin-left: auto;
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--mint-muted-foreground);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  /* Sidebar as off-canvas drawer */
+  .app-sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    z-index: 60;
+    width: 84vw;
+    max-width: 320px;
+    box-shadow: var(--mint-shadow-3);
+  }
+
+  .app-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .app-drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    animation: overlay-fade-in 0.18s ease;
+  }
+
+  .app-main {
+    margin-left: 0;
+    padding: 66px 14px 24px;
+  }
+
+  /* Brand popup renders inline inside the drawer */
+  .sidebar-popup {
+    position: static;
+    min-width: 0;
+    margin-top: 10px;
+    box-shadow: none;
+    animation: none;
+  }
+
+  .sidebar-popup::before {
+    display: none;
+  }
+
+  /* Grids collapse */
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .metric {
+    padding: 12px;
+  }
+
+  .metric strong {
+    font-size: 22px;
+  }
+
+  .metric span {
+    font-size: 12px;
+  }
+
+  .topic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topic-card {
+    min-height: 0;
+  }
+
+  .prompt-list {
+    grid-template-columns: 1fr;
+  }
+
+  .cover-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-panel-header {
+    flex-wrap: wrap;
+  }
+
+  /* Touch-friendly controls */
+  .stage-toggle,
+  .stage-number {
+    width: 40px;
+    height: 40px;
+  }
+
+  .detail-button {
+    height: 32px;
+    padding: 0 12px;
+  }
+
+  .history-remove {
+    width: 32px;
+    height: 32px;
+    font-size: 18px;
+  }
+
+  /* Prevent iOS zoom on input focus */
+  .field input,
+  .field textarea,
+  .mini-field input,
+  .mini-field select {
+    font-size: 16px;
+  }
+
+  .mini-field input,
+  .mini-field select {
+    height: 40px;
+  }
+
+  /* Let lists flow with the page instead of nested scroll */
+  .result-list,
+  .rag-stack,
+  .draft-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .log-list {
+    max-height: 40vh;
+  }
+
+  /* Note detail modal: drop the fake phone chrome, go full-screen */
+  .note-modal-overlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .note-modal {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .phone-speaker,
+  .phone-statusbar,
+  .phone-home-indicator {
+    display: none;
+  }
+
+  .note-modal-scroll {
+    border-radius: 0;
+    padding-top: 0;
+  }
+
+  .note-modal-close {
+    top: 12px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    font-size: 24px;
+  }
+
+  .note-carousel {
+    min-height: 0;
+    max-height: none;
+  }
+
+  .note-carousel-track {
+    height: clamp(240px, 45vh, 480px);
+  }
+
+  .note-modal-metrics {
+    flex-wrap: wrap;
+  }
+
+  .note-modal-metrics span {
+    flex: 1 1 calc(50% - 10px);
+  }
+
+  /* Debug modal full-screen */
+  .debug-modal {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .debug-json pre {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 380px) {
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
 }

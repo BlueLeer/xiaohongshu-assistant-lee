@@ -203,6 +203,7 @@ export function useModelConfig(defaultConfig) {
       image: { ...defaultConfig.image, ...saved.image },
     };
   });
+  const [hydrated, setHydrated] = useState(false);
 
   // Hydrate the full config (including apiKey) from the database once.
   useEffect(() => {
@@ -210,13 +211,16 @@ export function useModelConfig(defaultConfig) {
     (async () => {
       try {
         const saved = await fetchModelConfig();
-        if (cancelled || !saved || typeof saved !== "object") return;
-        setConfig((current) => ({
-          text: { ...current.text, ...(saved.text || {}) },
-          image: { ...current.image, ...(saved.image || {}) },
-        }));
+        if (!cancelled && saved && typeof saved === "object") {
+          setConfig((current) => ({
+            text: { ...current.text, ...(saved.text || {}) },
+            image: { ...current.image, ...(saved.image || {}) },
+          }));
+        }
       } catch {
         /* unavailable: keep localStorage defaults */
+      } finally {
+        if (!cancelled) setHydrated(true);
       }
     })();
     return () => {
@@ -224,14 +228,18 @@ export function useModelConfig(defaultConfig) {
     };
   }, []);
 
+  // Do not persist until hydration has finished, otherwise the initial state
+  // (often an empty apiKey) would clobber the value saved in the database.
   useEffect(() => {
+    if (!hydrated) return undefined;
     try {
       window.localStorage.setItem(MODEL_KEY, JSON.stringify(config));
     } catch {
       // Settings are an enhancement; generation remains available without storage.
     }
     saveModelConfig(config).catch(() => {});
-  }, [config]);
+    return undefined;
+  }, [config, hydrated]);
 
   return [config, setConfig];
 }
