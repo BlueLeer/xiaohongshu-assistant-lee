@@ -343,6 +343,7 @@ function StagePanel({ stepNumber, id, title, meta, actions, expanded, onToggle, 
             className="stage-toggle"
             aria-label={expanded ? "折叠面板" : "展开面板"}
             title={expanded ? "折叠" : "展开"}
+            onClick={onToggle}
           >
             <span className={expanded ? "chevron-up" : "chevron-down"} />
           </button>
@@ -388,6 +389,8 @@ export function App() {
   const [selectedPromptId, setSelectedPromptId] = useState(() => readWorkspaceDraft().selectedPromptId || null);
   const [coverImage, setCoverImage] = useState(() => readWorkspaceDraft().coverImage || null);
   const [lastSavedAt, setLastSavedAt] = useState(() => readWorkspaceDraft().savedAt ? nowText() : "");
+  const [currentHistoryId, setCurrentHistoryId] = useState(null);
+  const [previewDraftId, setPreviewDraftId] = useState(null);
   const [noteDetail, setNoteDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -399,7 +402,6 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [generatingKind, setGeneratingKind] = useState("");
   const [automationRunning, setAutomationRunning] = useState(false);
-  const [automationStage, setAutomationStage] = useState("");
   const [cliStatus, setCliStatus] = useState({
     state: "idle",
     label: "生成通道",
@@ -434,6 +436,12 @@ export function App() {
     () => drafts.find((draft) => draft.id === selectedDraftId),
     [drafts, selectedDraftId],
   );
+  // 预览卡片可独立切换文案；未单独指定时跟随主流程的当前选择。
+  // 若指向的草稿已不存在（重新生成后），自动回退到当前选择。
+  const previewDraft = useMemo(
+    () => (previewDraftId ? drafts.find((draft) => draft.id === previewDraftId) ?? selectedDraft : selectedDraft),
+    [previewDraftId, drafts, selectedDraft],
+  );
   const selectedPrompt = useMemo(
     () => prompts.find((prompt) => prompt.id === selectedPromptId),
     [prompts, selectedPromptId],
@@ -465,6 +473,17 @@ export function App() {
     selectedTopic,
     topics.length,
   ]);
+
+  const nextStepHint = useMemo(() => {
+    if (!persona.trim() || !keyword.trim()) return "完成账号人设与关键词设置，即可进入热门内容搜索。";
+    if (searchResults.length === 0) return "点击「搜索热门内容」，获取可参考的热门笔记。";
+    if (ragItems.length === 0) return "勾选搜索结果并加入本地 RAG，作为生成参考。";
+    if (topics.length === 0) return "生成 10 个选题，挑选最合适的方向。";
+    if (drafts.length === 0) return "确认选题后生成 5 篇文案。";
+    if (prompts.length === 0) return "选择一篇文案后生成封面 Prompt。";
+    if (!coverImage) return "点击封面 Prompt，生成最终封面图。";
+    return "创作流程已完成，可以保存草稿或开始新的创作。";
+  }, [persona, keyword, searchResults.length, ragItems.length, topics.length, drafts.length, prompts.length, coverImage]);
 
   const setError = (key) => {
     pushLog("error", "校验失败", errorMessages[key]);
@@ -964,6 +983,7 @@ export function App() {
     setPrompts([]);
     setSelectedPromptId(null);
     setCoverImage(null);
+    setPreviewDraftId(null);
   };
 
   const clearDownstreamFromRag = () => {
@@ -1104,15 +1124,29 @@ export function App() {
     setCarouselIndex(0);
     setNoteDetail({
       mode: "preview",
-      title: selectedDraft?.title || "小红书草稿预览",
-      desc: selectedDraft?.body || "选择一篇文案后，这里将展示完整的小红书发布预览。",
+      previewDraftId: previewDraft?.id ?? null,
+      title: previewDraft?.title || "小红书草稿预览",
+      desc: previewDraft?.body || "选择一篇文案后，这里将展示完整的小红书发布预览。",
       author: "薄荷小丸子",
       type: "image",
       coverUrl: coverImage?.src || "/assets/spring-outfit.png",
       images: [],
       tags: [keyword || "小红书创作"],
-      metrics: { liked: "1289", collected: "965", comments: "213", shares: "—" },
+      metrics: { liked: "—", collected: "—", comments: "—", shares: "—" },
     });
+  };
+
+  const switchPreviewDraft = (dir) => {
+    if (drafts.length === 0) return;
+    const currentId = noteDetail?.previewDraftId ?? previewDraft?.id ?? selectedDraftId;
+    const currentIndex = Math.max(0, drafts.findIndex((draft) => draft.id === currentId));
+    const nextDraft = drafts[(currentIndex + dir + drafts.length) % drafts.length];
+    setPreviewDraftId(nextDraft.id);
+    setNoteDetail((prev) =>
+      prev && prev.mode === "preview"
+        ? { ...prev, previewDraftId: nextDraft.id, title: nextDraft.title, desc: nextDraft.body }
+        : prev,
+    );
   };
 
   const toggleSearchResult = (id) => {
@@ -1171,6 +1205,7 @@ export function App() {
 
     setDrafts(nextDrafts);
     setSelectedDraftId(nextDrafts[0].id);
+    setPreviewDraftId(null);
     setPrompts([]);
     setSelectedPromptId(null);
     setCoverImage(null);
@@ -1264,7 +1299,6 @@ export function App() {
     let currentAutomationStage = "";
     const moveAutomationStage = (stage) => {
       currentAutomationStage = stage;
-      setAutomationStage(stage);
     };
     const context = {
       persona: (personaRef.current?.value ?? persona).trim(),
@@ -1497,7 +1531,6 @@ export function App() {
       setCustomError(`自动化生成中断：${message}`);
     } finally {
       setAutomationRunning(false);
-      setAutomationStage("");
       setGeneratingKind("");
     }
   };
@@ -1531,12 +1564,33 @@ export function App() {
     setCoverImage(draft.coverImage || null);
     setActiveStep(draft.coverImage ? "cover" : draft.drafts?.length ? "drafts" : draft.topics?.length ? "topics" : "research");
     setLastSavedAt(nowText());
+    setCurrentHistoryId(snapshot.id);
     pushLog("success", "已载入历史草稿", `已恢复「${snapshot.title}」的创作内容。`);
+  };
+
+  const startNewCreation = () => {
+    openConfirm({
+      title: "开始全新创作？",
+      description: "将清空当前所有人设、关键词、搜索结果、参考内容、选题、文案与封面，开始一个全新的创作。此操作不可撤销。",
+      confirmText: "新建",
+      danger: true,
+      onConfirm: () => {
+        setPersona("");
+        setKeyword("");
+        setWritingBrief("");
+        resetGeneratedState();
+        setActiveStep("input");
+        setLastSavedAt("");
+        setCurrentHistoryId(null);
+        pushLog("info", "新建创作", "已清空当前内容，开始全新创作。");
+      },
+    });
   };
 
   const saveDraft = () => {
     const savedAt = stampSaved();
     const snapshot = saveSnapshot(currentWorkspace());
+    setCurrentHistoryId(snapshot.id);
     pushLog("success", "保存草稿", `已保存「${snapshot.title}」到历史草稿库（${savedAt}）。`);
   };
 
@@ -1811,9 +1865,9 @@ export function App() {
             <span>{history.length}/20</span>
           </header>
           {history.length === 0 ? <p className="history-empty">手动保存后，可在这里回看完整创作内容。</p> : history.map((project) => (
-            <div key={project.id} className="history-item">
+            <div key={project.id} className={`history-item${currentHistoryId === project.id ? " active" : ""}`}>
               <button className="project" type="button" title={`${project.title}\n${project.meta} · ${new Date(project.savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`} onClick={() => { loadHistory(project); closeMobileNav(); }}>
-                <SoftIcon tone="mint">稿</SoftIcon>
+                <SoftIcon tone={currentHistoryId === project.id ? "mint" : "muted"}>稿</SoftIcon>
                 <span>
                   <strong>{project.title}</strong>
                   <small>{project.meta} · {new Date(project.savedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small>
@@ -1852,7 +1906,7 @@ export function App() {
             <div className="hero-title-row">
               <div>
                 <span className="eyebrow">创作工作区</span>
-                <h1>创作流程 {progress}%</h1>
+                <h1>创作流程</h1>
               </div>
               <div className="workspace-actions">
                 <span className="save-hint">{lastSavedAt ? `已保存 ${lastSavedAt}` : workspaceSavedAt ? "已恢复本地草稿" : "本地草稿会自动保存"}</span>
@@ -1864,7 +1918,7 @@ export function App() {
             <div className="progress-bar">
               <i style={{ "--progress": `${progress}%` }} />
             </div>
-            <p>完成账号人设与关键词设置，即可进入热门内容搜索。</p>
+            <p><strong className="progress-value font-tabular">{progress}%</strong>{nextStepHint}</p>
           </div>
           <div className="metric-grid">
             <div className="metric">
@@ -1887,6 +1941,20 @@ export function App() {
         </section>
 
         <section className="stage-panels">
+          <button
+            className="new-creation-banner"
+            type="button"
+            onClick={startNewCreation}
+            disabled={isBusy}
+          >
+            <span className="new-creation-icon" aria-hidden="true">＋</span>
+            <span className="new-creation-text">
+              <strong>新建创作</strong>
+              <small>清空当前内容，开启一个全新的创作流程</small>
+            </span>
+            <span className="new-creation-go" aria-hidden="true">开始 ›</span>
+          </button>
+
           <StagePanel
             stepNumber={1}
             id="input"
@@ -2208,7 +2276,34 @@ export function App() {
 
         <section className="bottom-grid">
           <article className="card preview-card">
-            <SectionHeader icon="预" tone="mint" title="小红书预览" meta="选择文案后实时查看草稿" action={<button className="ghost-button small" type="button" onClick={openPostPreview}>预览</button>} />
+            <SectionHeader
+              icon="预"
+              tone="mint"
+              title="小红书预览"
+              meta={drafts.length ? "支持在下方切换不同文案预览" : "选择文案后实时查看草稿"}
+              action={
+                <div className="preview-actions">
+                  {drafts.length > 0 ? (
+                    <select
+                      className="preview-draft-select"
+                      value={previewDraftId ?? ""}
+                      onChange={(event) => setPreviewDraftId(event.target.value || null)}
+                      aria-label="切换预览文案"
+                    >
+                      <option value="">跟随当前选择</option>
+                      {drafts.map((draft) => (
+                        <option key={draft.id} value={draft.id} title={draft.title}>
+                          {draft.title}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <button className="ghost-button small" type="button" onClick={openPostPreview}>
+                    预览
+                  </button>
+                </div>
+              }
+            />
             <div className="post-card">
               <div className="post-author">
                 <img src="/assets/avatar-creator.png" alt="" />
@@ -2223,12 +2318,12 @@ export function App() {
                 />
                   <span className="cover-count">{coverImage?.source === "imported" ? "已导入" : coverImage ? "已生成" : "预览"}</span>
               </div>
-              <h3>{selectedDraft?.title ?? "选择一篇文案后，这里显示小红书标题"}</h3>
-              <p>{selectedDraft?.body ?? "正文预览会保留话题标签格式，例如 #夏日通勤[话题]#。"}</p>
+              <h3>{previewDraft?.title ?? "选择一篇文案后，这里显示小红书标题"}</h3>
+              <p>{previewDraft?.body ?? "正文预览会保留话题标签格式，例如 #夏日通勤[话题]#。"}</p>
               <footer>
-                <span><b className="post-icon like">心</b>1289</span>
-                <span><b className="post-icon star">藏</b>965</span>
-                <span><b className="post-icon chat">评</b>213</span>
+                <span><b className="post-icon like">心</b>赞</span>
+                <span><b className="post-icon star">星</b>藏</span>
+                <span><b className="post-icon chat">话</b>评</span>
               </footer>
             </div>
           </article>
@@ -2321,7 +2416,7 @@ export function App() {
         </section>
 
         <footer className="app-footer">
-          <span>已加载新版阶段式工作台，支持账号人设、搜索、RAG、选题、文案与封面一站式创作。</span>
+          <span>薄荷工坊 · 小红书 AI 创作助理</span>
           <span>{cliStatus.state === "running" ? cliStatus.text : logs[0]?.text ?? "等待操作。"}</span>
         </footer>
       </main>
@@ -2362,6 +2457,22 @@ export function App() {
             if (event.target === event.currentTarget) closeNoteDetail();
           }}
         >
+          {noteDetail.mode === "preview" && drafts.length > 1 ? (
+            <>
+              <button
+                type="button"
+                className="note-preview-arrow is-prev"
+                onClick={() => switchPreviewDraft(-1)}
+                aria-label="上一篇"
+              >{`<`}</button>
+              <button
+                type="button"
+                className="note-preview-arrow is-next"
+                onClick={() => switchPreviewDraft(1)}
+                aria-label="下一篇"
+              >{`>`}</button>
+            </>
+          ) : null}
           <div className="note-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="phone-speaker" aria-hidden="true" />
             <div className="phone-statusbar" aria-hidden="true">

@@ -7,3 +7,21 @@ test-results/
 
 .DS_Store
 *.log
+
+# 敏感配置与本地密钥（API Key 禁止入库）
+.env
+.env.*
+!.env.example
+config.json
+*.pem
+*.p12
+
+# 本地 SQLite 数据库（含模型配置/API Key 的 kv 表）
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# WorkBuddy 本地项目数据
+.workbuddy/
